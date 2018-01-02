@@ -8,6 +8,7 @@ using namespace std;
 
 class MPC {
  public:
+
   MPC();
 
   virtual ~MPC();

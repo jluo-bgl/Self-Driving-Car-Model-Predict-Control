@@ -1,5 +1,6 @@
 #include <math.h>
 #include <uWS/uWS.h>
+#include <tuple>
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -65,6 +66,21 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
   return result;
 }
 
+tuple<Eigen::VectorXd, Eigen::VectorXd> convert_to_vehicle_space(
+    const double px, const double py, const double psi,
+    const vector<double> ptsx, const vector<double> ptsy) {
+  size_t waypoints = ptsx.size();
+  Eigen::VectorXd ptsx_vehicle = Eigen::VectorXd(waypoints);
+  Eigen::VectorXd ptsy_vehicle = Eigen::VectorXd(waypoints);
+  for (unsigned int i = 0; i < waypoints; i++ ) {
+    double x = ptsx[i] - px;
+    double y = ptsy[i] - py;
+    ptsx_vehicle(i) = x * cos(psi) + y * sin(psi);
+    ptsy_vehicle(i) = - x * sin(psi) + y * cos(psi);
+  }
+  return make_tuple(ptsx_vehicle, ptsy_vehicle);
+}
+
 int main() {
   uWS::Hub h;
 
@@ -90,23 +106,43 @@ int main() {
           double px = j[1]["x"];
           double py = j[1]["y"];
           double psi = j[1]["psi"];
-          double v = j[1]["speed"];
+          double velocity = j[1]["speed"];
+          double steering_angle= j[1]["steering_angle"];
+          double throttle = j[1]["throttle"];
 
-          cout << ptsx.size() << ptsy.size() << endl;
+          auto pts_vehicle = convert_to_vehicle_space(px, py, psi, ptsx, ptsy);
+          auto ptsx_vehicle = get<0>(pts_vehicle);
+          auto ptsy_vehicle = get<1>(pts_vehicle);
 
-          /*
-          * TODO: Calculate steering angle and throttle using MPC.
-          *
-          * Both are in between [-1, 1].
-          *
-          */
-          double steer_value = 0.0;
-          double throttle_value = 0.3;
+          auto coeffs = polyfit(ptsx_vehicle, ptsy_vehicle, 3);
+
+          const double delay = 100 / 1000.0;
+
+          const double Lf = 2.67;
+          const double cte = -polyeval(coeffs, 0);
+          const double epsi = -atan(coeffs[1]);
+
+          double x_delay = 0 + ( velocity * delay );
+          double y_delay = 0;
+          double psi_delay = 0 - ( velocity * steering_angle * delay / Lf );
+          double v_delay = velocity + throttle * delay;
+          double cte_delay = cte + ( velocity * sin(epsi) * delay );
+          double epsi_delay = epsi - ( velocity * atan(coeffs[1]) * delay / Lf );
+
+          // Define the state vector.
+          Eigen::VectorXd state(6);
+          state << x_delay, y_delay, psi_delay, v_delay, cte_delay, epsi_delay;
+
+          // Find the MPC solution.
+          auto vars = mpc.Solve(state, coeffs);
+
+          double steer_value = vars[0]/deg2rad(25);
+          double throttle_value = vars[1];
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-          msgJson["steering_angle"] = steer_value/deg2rad(25);
+          msgJson["steering_angle"] = steer_value;
           msgJson["throttle"] = throttle_value;
 
           //Display the MPC predicted trajectory 
@@ -115,9 +151,12 @@ int main() {
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Green line
-          for (unsigned i=0 ; i < ptsx.size(); ++i) {
-            mpc_x_vals.push_back(ptsx[i]);
-            mpc_y_vals.push_back(ptsx[i]);
+          for ( int i = 2; i < vars.size(); i++ ) {
+            if ( i % 2 == 0 ) {
+              mpc_x_vals.push_back( vars[i] );
+            } else {
+              mpc_y_vals.push_back( vars[i] );
+            }
           }
 
           msgJson["mpc_x"] = mpc_x_vals;
@@ -129,9 +168,12 @@ int main() {
 
           //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
           // the points in the simulator are connected by a Yellow line
-          for (unsigned i=0 ; i < ptsx.size(); ++i) {
-            next_x_vals.push_back(ptsx[i]);
-            next_y_vals.push_back(ptsx[i]);
+          double poly_inc = 2.5;
+          int num_points = 25;
+          for ( int i=0; i < num_points; i++ ) {
+            double x = poly_inc * i;
+            next_x_vals.push_back( x );
+            next_y_vals.push_back( polyeval(coeffs, x) );
           }
 
           msgJson["next_x"] = next_x_vals;
