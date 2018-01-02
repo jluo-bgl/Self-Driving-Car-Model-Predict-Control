@@ -3,6 +3,9 @@ Self-Driving Car Engineer Nanodegree Program
 
 ---
 
+![sharp_turn_with_63mph_with_mpc](doc/sharp_turn_with_mpc.png)
+
+
 ## Model Car State
 
 * x
